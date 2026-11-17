@@ -1,0 +1,265 @@
+import json
+from unittest.mock import ANY
+
+from beanie import PydanticObjectId
+
+from domain.common.filter_models import (
+    FilterDataType,
+    FilterOperatorsNumber,
+    FilterOperatorsString,
+    LogicalOperators,
+)
+from domain.segments.models import (
+    SegmentFilterConditions,
+    SegmentGroup,
+    WhereSegmentFilter,
+)
+
+
+def test_compute_transient_segment(
+    client_init, transient_segment_data, computed_segment_response, segment_service
+):
+    response = client_init.post(
+        "/segments/transient", data=json.dumps(transient_segment_data)
+    )
+    assert response.status_code == 200
+    assert response.json() == computed_segment_response
+    segment_service.compute_segment.assert_called_once_with(
+        **{
+            "columns": ["properties.$app_release", "properties.$city"],
+            "datasource_id": "000000000000000000000018",
+            "app_id": "000000000000000000000003",
+            "groups": [
+                SegmentGroup(
+                    filters=[
+                        WhereSegmentFilter(
+                            operator=FilterOperatorsString.IS,
+                            operand="properties.$city",
+                            values=["Example Location 3", "Example Location 2", "Bhopal"],
+                            all=False,
+                            condition=SegmentFilterConditions.WHERE,
+                            datatype=FilterDataType.STRING,
+                        ),
+                        WhereSegmentFilter(
+                            operator=FilterOperatorsNumber.EQ,
+                            operand="properties.$app_release",
+                            values=[5003, 2077, 5002],
+                            all=False,
+                            condition=SegmentFilterConditions.AND,
+                            datatype=FilterDataType.NUMBER,
+                        ),
+                    ],
+                    condition=LogicalOperators.AND,
+                )
+            ],
+        }
+    )
+
+
+def test_save_segment(
+    client_init, segment_data, saved_segment_response, segment_service
+):
+    response = client_init.post("/segments", data=json.dumps(segment_data))
+    assert response.status_code == 200
+    assert response.json() == saved_segment_response
+    segment_service.build_segment.assert_called_once_with(
+        **{
+            "appId": PydanticObjectId("000000000000000000000003"),
+            "columns": ["properties.$app_release", "properties.$city"],
+            "datasourceId": PydanticObjectId("000000000000000000000018"),
+            "description": "test",
+            "groups": [
+                SegmentGroup(
+                    filters=[
+                        WhereSegmentFilter(
+                            operand="properties.$city",
+                            operator=FilterOperatorsString.IS,
+                            values=["Example Location 3", "Example Location 2", "Bhopal"],
+                            type=SegmentFilterConditions.WHERE,
+                            all=False,
+                            condition=SegmentFilterConditions.WHERE,
+                            datatype=FilterDataType.STRING,
+                        ),
+                        WhereSegmentFilter(
+                            operand="properties.$app_release",
+                            operator=FilterOperatorsNumber.EQ,
+                            values=[5003, 2077, 5002],
+                            type=SegmentFilterConditions.WHERE,
+                            all=False,
+                            condition=SegmentFilterConditions.AND,
+                            datatype=FilterDataType.NUMBER,
+                        ),
+                    ],
+                    condition=LogicalOperators.AND,
+                )
+            ],
+            "name": "name",
+            "userId": ANY,
+        }
+    )
+
+    assert segment_service.add_segment.call_args.kwargs["segment"].dict() == {
+        "app_id": PydanticObjectId("000000000000000000000018"),
+        "columns": ["properties.$app_release", "properties.$city"],
+        "created_at": ANY,
+        "datasource_id": PydanticObjectId("000000000000000000000018"),
+        "description": "test",
+        "groups": [
+            {
+                "condition": LogicalOperators.AND,
+                "filters": [
+                    {
+                        "all": False,
+                        "condition": SegmentFilterConditions.WHERE,
+                        "operand": "properties.$city",
+                        "operator": FilterOperatorsString.IS,
+                        "type": SegmentFilterConditions.WHERE,
+                        "values": ["Example Location 3", "Example Location 2", "Bhopal"],
+                        "datatype": FilterDataType.STRING,
+                    },
+                    {
+                        "all": False,
+                        "condition": SegmentFilterConditions.AND,
+                        "operand": "properties.$app_release",
+                        "operator": FilterOperatorsNumber.EQ,
+                        "type": "where",
+                        "values": [5003, 2077, 5002],
+                        "datatype": FilterDataType.NUMBER,
+                    },
+                ],
+            }
+        ],
+        "id": None,
+        "name": "name",
+        "revision_id": ANY,
+        "updated_at": None,
+        "user_id": PydanticObjectId("000000000000000000000018"),
+        "enabled": True,
+    }
+
+
+def test_get_segment(client_init, segment_service):
+    response = client_init.get("/segments/000000000000000000000020")
+    assert response.status_code == 200
+    segment_service.get_segment.assert_called_once_with(
+        **{"segment_id": "000000000000000000000020"}
+    )
+
+
+def test_get_segments(client_init, segment_service):
+    response = client_init.get("/segments?app_id=000000000000000000000020")
+    assert response.status_code == 200
+    segment_service.get_segments_for_app.assert_called_once_with(
+        **{"app_id": "000000000000000000000020"}
+    )
+
+
+def test_update_segment(
+    client_init, segment_data, saved_segment_response, segment_service
+):
+    response = client_init.put(
+        "/segments/0000000000000000003eb", data=json.dumps(segment_data)
+    )
+    assert response.status_code == 200
+    assert response.json() == saved_segment_response
+    segment_service.build_segment.assert_called_with(
+        **{
+            "appId": PydanticObjectId("000000000000000000000003"),
+            "columns": ["properties.$app_release", "properties.$city"],
+            "datasourceId": PydanticObjectId("000000000000000000000018"),
+            "description": "test",
+            "groups": [
+                SegmentGroup(
+                    filters=[
+                        WhereSegmentFilter(
+                            operand="properties.$city",
+                            operator=FilterOperatorsString.IS,
+                            values=["Example Location 3", "Example Location 2", "Bhopal"],
+                            type=SegmentFilterConditions.WHERE,
+                            all=False,
+                            condition=SegmentFilterConditions.WHERE,
+                            datatype=FilterDataType.STRING,
+                        ),
+                        WhereSegmentFilter(
+                            operand="properties.$app_release",
+                            operator=FilterOperatorsNumber.EQ,
+                            values=[5003, 2077, 5002],
+                            type=SegmentFilterConditions.WHERE,
+                            all=False,
+                            condition=SegmentFilterConditions.AND,
+                            datatype=FilterDataType.NUMBER,
+                        ),
+                    ],
+                    condition=LogicalOperators.AND,
+                )
+            ],
+            "name": "name",
+            "userId": ANY,
+        }
+    )
+
+    assert segment_service.update_segment.call_args.kwargs["new_segment"].dict() == {
+        "app_id": PydanticObjectId("000000000000000000000018"),
+        "columns": ["properties.$app_release", "properties.$city"],
+        "created_at": ANY,
+        "datasource_id": PydanticObjectId("000000000000000000000018"),
+        "description": "test",
+        "groups": [
+            {
+                "condition": LogicalOperators.AND,
+                "filters": [
+                    {
+                        "all": False,
+                        "condition": SegmentFilterConditions.WHERE,
+                        "operand": "properties.$city",
+                        "operator": FilterOperatorsString.IS,
+                        "type": SegmentFilterConditions.WHERE,
+                        "values": ["Example Location 3", "Example Location 2", "Bhopal"],
+                        "datatype": FilterDataType.STRING,
+                    },
+                    {
+                        "all": False,
+                        "condition": SegmentFilterConditions.AND,
+                        "operand": "properties.$app_release",
+                        "operator": FilterOperatorsNumber.EQ,
+                        "type": "where",
+                        "values": [5003, 2077, 5002],
+                        "datatype": FilterDataType.NUMBER,
+                    },
+                ],
+            }
+        ],
+        "id": None,
+        "name": "name",
+        "revision_id": ANY,
+        "updated_at": None,
+        "user_id": PydanticObjectId("000000000000000000000018"),
+        "enabled": True,
+    }
+    assert (
+        "0000000000000000003eb"
+        == segment_service.update_segment.call_args.kwargs["segment_id"]
+    )
+
+
+def test_get_segments(client_init, segment_service, saved_segment_with_user):
+    response = client_init.get("/segments?datasource_id=000000000000000000000020")
+    assert response.status_code == 200
+    assert response.json() == saved_segment_with_user
+    segment_service.get_segments_for_datasource_id.assert_called_once_with(
+        **{"datasource_id": "000000000000000000000020"}
+    )
+
+
+def test_delete_segment(
+    client_init,
+    segment_service,
+):
+    response = client_init.delete("/segments/00000000000000000000001b")
+    assert response.status_code == 200
+
+    segment_service.delete_segment.assert_called_once_with(
+        **{
+            "segment_id": "00000000000000000000001b",
+        }
+    )

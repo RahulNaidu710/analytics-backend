@@ -1,0 +1,140 @@
+from typing import List
+
+from beanie import PydanticObjectId
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from domain.actions.service import ActionService
+from domain.platform_users.models import PlatformUser
+from domain.datasources.service import DataSourceService
+from rest.dtos.actions import (
+    ActionResponse,
+    ActionWithUser,
+    ComputedActionResponse,
+    CreateActionDto,
+    TransientActionDto,
+)
+from rest.dtos.platform_users import PlatformUserResponse
+from rest.middlewares import get_user, get_user_id, validate_jwt
+from rest.middlewares.validate_app_user import validate_app_user, validate_library_items
+
+router = APIRouter(
+    tags=["actions"],
+    dependencies=[Depends(validate_jwt)],
+    responses={401: {}},
+)
+
+
+@router.post(
+    "/actions",
+    response_model=ActionResponse,
+    dependencies=[Depends(validate_app_user)],
+)
+async def create_action(
+    dto: CreateActionDto,
+    user_id: str = Depends(get_user_id),
+    action_service: ActionService = Depends(),
+    ds_service: DataSourceService = Depends(),
+):
+    datasource = await ds_service.get_datasource(dto.datasourceId)
+    existing_action = await action_service.get_action_by_name(dto.name)
+    if existing_action:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Action name should be unique",
+        )
+    action = action_service.build_action(
+        datasourceId=datasource.id,
+        appId=datasource.app_id,
+        userId=user_id,
+        name=dto.name,
+        groups=dto.groups,
+    )
+    await action_service.add_action(action=action)
+    await action_service.update_events_for_action(action=action)
+    return action
+
+
+@router.get(
+    "/actions",
+    response_model=List[ActionWithUser],
+    dependencies=[Depends(validate_app_user)],
+)
+async def get_actions(
+    datasource_id: str,
+    action_service: ActionService = Depends(),
+    user: PlatformUser = Depends(get_user),
+):
+    actions = await action_service.get_actions_for_datasource_id(
+        datasource_id=datasource_id
+    )
+    actions = [ActionWithUser.from_orm(s) for s in actions]
+    for action in actions:
+        action.user = PlatformUserResponse.from_orm(user)
+
+    return actions
+
+
+@router.get(
+    "/actions/{id}",
+    response_model=ActionResponse,
+    dependencies=[Depends(validate_library_items)],
+)
+async def get_saved_action(
+    id: str,
+    action_service: ActionService = Depends(),
+):
+    return await action_service.get_action(id=id)
+
+
+@router.put(
+    "/actions/{id}",
+    response_model=ActionResponse,
+    dependencies=[Depends(validate_app_user)],
+)
+async def update_action(
+    id: str,
+    dto: CreateActionDto,
+    user_id: str = Depends(get_user_id),
+    action_service: ActionService = Depends(),
+    ds_service: DataSourceService = Depends(),
+):
+    datasource = await ds_service.get_datasource(dto.datasourceId)
+    action = action_service.build_action(
+        datasourceId=datasource.id,
+        appId=datasource.app_id,
+        userId=user_id,
+        name=dto.name,
+        groups=dto.groups,
+    )
+
+    await action_service.update_action(action_id=id, action=action)
+    return action
+
+
+@router.post(
+    "/actions/transient",
+    response_model=ComputedActionResponse,
+    dependencies=[Depends(validate_app_user)],
+)
+async def compute_transient_actions(
+    dto: TransientActionDto,
+    action_service: ActionService = Depends(),
+    ds_service: DataSourceService = Depends(),
+):
+    datasource = await ds_service.get_datasource(dto.datasourceId)
+    return await action_service.compute_action(
+        datasource_id=dto.datasourceId,
+        groups=dto.groups,
+        date_filter=dto.dateFilter,
+        app_id=datasource.app_id,
+    )
+
+
+@router.delete(
+    "/actions/{id}",
+    dependencies=[Depends(validate_library_items)],
+)
+async def delete_action(
+    id: PydanticObjectId, action_service: ActionService = Depends()
+):
+    await action_service.delete_action(id=id)

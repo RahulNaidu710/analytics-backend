@@ -1,0 +1,203 @@
+from typing import List, Union
+
+from pypika import ClickHouseQuery, Criterion, Field, Parameter
+from pypika import functions as fn
+
+from repositories.clickhouse.base import EventsBase
+
+
+class Events(EventsBase):
+    async def get_unique_events(self, datasource_id: str, app_id: str):
+        query, params = self.build_unique_events_query(datasource_id)
+        return await self.execute_query_for_app(
+            query=query, parameters=params, app_id=app_id
+        )
+
+    async def get_events(
+        self,
+        datasource_id: str,
+        user_id: Union[str, None],
+        page_number: int,
+        page_size: int,
+        app_id: str,
+    ):
+        return await self.execute_query_for_app(
+            app_id=app_id,
+            *self.build_events_query(datasource_id, user_id, page_number, page_size),
+        )
+
+    async def get_events_count(
+        self, datasource_id: str, app_id: str, user_id: Union[str, None]
+    ):
+        params = {"ds_id": datasource_id}
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .select(fn.Count("*"))
+            .where(self.table.datasource_id == Parameter("%(ds_id)s"))
+        )
+        if user_id:
+            params["user_id"] = user_id
+            query = query.where(self.table.user_id == Parameter("%(user_id)s"))
+        return await self.execute_query_for_app(
+            app_id=app_id, query=query.get_sql(), parameters=params
+        )
+
+    def build_events_query(
+        self,
+        datasource_id: str,
+        user_id: Union[str, None],
+        page_number: int,
+        page_size: int,
+    ):
+        params = {"ds_id": datasource_id}
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .select(
+                self.table.event_name,
+                self.table.timestamp,
+            )
+            .where(self.table.datasource_id == Parameter("%(ds_id)s"))
+        )
+
+        if user_id:
+            params["user_id"] = user_id
+            query = query.where(self.table.user_id == Parameter("%(user_id)s")).orderby(
+                self.table.timestamp
+            )
+            query = query.limit(page_size).offset(page_number * page_size)
+        else:
+            query = query.select(
+                self.table.user_id, Field(f"properties.properties.$city")
+            )
+            query = query.limit(100)
+
+        return query.get_sql(), params
+
+    def build_unique_events_query(self, datasource_id: str):
+        params = {"ds_id": datasource_id}
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .where(self.table.datasource_id == Parameter("%(ds_id)s"))
+            .where(self.table.event_name.not_like("%%/%%"))
+            .where(self.table.event_name.not_like("%%?%%"))
+            .select(self.table.event_name)
+            .distinct()
+        )
+        return query.get_sql(), params
+
+    async def get_event_properties(self, datasource_id: str, app_id: str):
+        return await self.execute_query_for_app(
+            app_id=app_id, *self.build_event_properties_query(datasource_id)
+        )
+
+    def build_event_properties_query(self, datasource_id: str):
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .select(
+                self.json_extract_keys_func(
+                    self.to_json_string_func(self.table.properties)
+                ),
+                self.date_func(self.table.timestamp),
+            )
+            .where(self.table.datasource_id == Parameter("%(ds_id)s"))
+            .limit(1)
+        )
+        return query.get_sql(), {"ds_id": datasource_id}
+
+    async def get_distinct_values_for_properties(
+        self, all_props: List[str], date: str, ds_id: str, app_id: str
+    ):
+        return await self.execute_query_for_app(
+            app_id=app_id,
+            *self.build_distinct_values_for_properties_query(all_props, date, ds_id),
+        )
+
+    def build_distinct_values_for_properties_query(
+        self, all_props: List[str], date: str, ds_id: str
+    ):
+        query = ClickHouseQuery.from_(self.table)
+        for prop in all_props:
+            query = query.select(fn.Count(Field(f"properties.{prop}")).distinct())
+        query = query.where(
+            Criterion.all(
+                [
+                    self.table.datasource_id == Parameter("%(ds_id)s"),
+                    self.date_func(self.table.timestamp) == Parameter("%(date)s"),
+                ]
+            )
+        )
+        return query.get_sql(), {"ds_id": ds_id, "date": date}
+
+    async def get_values_for_property(
+        self,
+        datasource_id: str,
+        event_property: str,
+        start_date: str,
+        end_date: str,
+        app_id: str,
+    ):
+        return await self.execute_query_for_app(
+            app_id=app_id,
+            *self.build_values_for_property_query(
+                datasource_id, event_property, start_date, end_date
+            ),
+        )
+
+    def build_values_for_property_query(
+        self, datasource_id: str, event_property: str, start_date: str, end_date: str
+    ):
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .select(Field(f"properties.{event_property}"))
+            .distinct()
+            .where(Criterion.all(self.total_criterion))
+            .limit(100)
+        )
+        return query.get_sql(), {
+            "ds_id": datasource_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+
+    def get_all_datasources(self):
+        query, params = self.build_get_all_datasources_query()
+        return self.execute_get_query(query, params)
+
+    def build_get_all_datasources_query(self):
+        query = (
+            ClickHouseQuery.from_(self.table)
+            .select(self.table.datasource_id)
+            .distinct()
+        )
+        return query.get_sql(), {}
+
+    async def get_aux_events(self, datasource_id: str, table_name: str, app_id: str):
+        return await self.execute_query_for_app(
+            app_id=app_id, *self.build_aux_events_query(datasource_id, table_name)
+        )
+
+    def build_aux_events_query(self, datasource_id: str, table_name: str):
+        query = ClickHouseQuery.from_(self.table).select(self.table.user_id)
+        query = (
+            query.select(self.table.event_name, self.table.timestamp)
+            if table_name == "Backend CRM"
+            else query.select(fn.Max(Field("properties.properties.salary_basic")))
+        )
+        query = query.where(self.table.datasource_id == Parameter("%(ds_id)s"))
+        query = (
+            query.where(
+                self.table.event_name.isin(
+                    [
+                        "documents_verified",
+                        "eligibility_invalid",
+                        "insurance_processed",
+                        "offer_confirmed",
+                    ]
+                )
+            )
+            if table_name == "Backend CRM"
+            else query.groupby(self.table.user_id).having(
+                Field("properties.properties.salary_basic") > 0
+            )
+        )
+        return query.get_sql(), {"ds_id": datasource_id}

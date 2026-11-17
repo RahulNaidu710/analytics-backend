@@ -1,0 +1,364 @@
+import asyncio
+import datetime
+import json
+from unittest.mock import ANY
+
+from beanie import PydanticObjectId
+
+from domain.apps.models import App, ClickHouseCredential
+from domain.common.models import IntegrationProvider
+from domain.integrations.models import (
+    Credential,
+    CredentialType,
+    CSVCredential,
+    Integration,
+    MySQLCredential,
+    RelationalDatabaseType,
+)
+
+
+def test_add_integration_with_datasource(
+    client_init, integration_data, integration_response
+):
+    response = client_init.post(
+        "/integrations?create_datasource=true&trigger_data_processor=false",
+        data=json.dumps(integration_data),
+    )
+    assert response.status_code == 200
+    assert response.json() == integration_response
+
+
+def test_add_integration_with_datasource_with_trigger_data_processor(
+    client_init, integration_data, integration_response, runlog_service, dpq_service
+):
+    response = client_init.post(
+        "/integrations?create_datasource=true&trigger_data_processor=true",
+        data=json.dumps(integration_data),
+    )
+    assert response.status_code == 200
+    runlog_service.create_runlogs.assert_called_once()
+    dpq_service.enqueue_from_runlogs.assert_called_once()
+    assert response.json() == integration_response
+
+
+def test_add_database_integration(
+    client_init, database_integration_data, integration_response, integration_service
+):
+    integration_future = asyncio.Future()
+    integration_future.set_result(
+        Integration(
+            app_id="000000000000000000000003",
+            user_id="000000000000000000000003",
+            provider=IntegrationProvider.MYSQL,
+            credential=Credential(
+                type=CredentialType.MYSQL,
+                api_key=None,
+                account_id=None,
+                secret=None,
+                tableName=None,
+                csv_credential=None,
+                mysql_credential=MySQLCredential(
+                    host="127.0.0.1",
+                    port="3306",
+                    username="test-user",
+                    password="password",
+                    databases=["test-db"],
+                    ssh_credential=None,
+                ),
+            ),
+        )
+    )
+    integration_service.create_integration.return_value = integration_future
+    response = client_init.post(
+        "/integrations?create_datasource=true&trigger_data_processor=false",
+        data=json.dumps(database_integration_data),
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "_id": None,
+        "appId": "000000000000000000000003",
+        "createdAt": ANY,
+        "credential": {
+            "account_id": None,
+            "api_key": None,
+            "mysql_credential": {
+                "host": "127.0.0.1",
+                "over_ssh": False,
+                "password": "password",
+                "databases": ["test-db"],
+                "port": "3306",
+                "ssh_credential": None,
+                "username": "test-user",
+            },
+            "mssql_credential": None,
+            "cdc_credential": None,
+            "refresh_token": None,
+            "secret": None,
+            "tableName": None,
+            "type": "MYSQL",
+            "csv_credential": None,
+            "api_base_url": None,
+            "branch_credential": None,
+            "tata_ivr_token": None,
+            "facebook_ads_credential": None,
+            "events_config_credential": None,
+        },
+        "datasource": {
+            "_id": "000000000000000000000003",
+            "appId": "000000000000000000000003",
+            "createdAt": ANY,
+            "enabled": True,
+            "externalSourceId": "123",
+            "integrationId": "000000000000000000000003",
+            "name": None,
+            "provider": "platform",
+            "revisionId": None,
+            "updatedAt": None,
+            "userId": "000000000000000000000003",
+            "version": "DEFAULT",
+        },
+        "provider": "mysql",
+        "revisionId": None,
+        "updatedAt": None,
+        "userId": "000000000000000000000003",
+        "enabled": None,
+    }
+
+
+def test_check_database_connection(
+    client_init, integration_service, database_credential_data
+):
+    response = client_init.post(
+        "/integrations/database/test",
+        data=json.dumps(database_credential_data),
+    )
+    assert response.status_code == 200
+    assert response.json() == True
+    integration_service.test_database_connection.assert_called_once_with(
+        **{
+            "host": "127.0.0.1",
+            "password": "password",
+            "port": "3306",
+            "username": "test-user",
+            "ssh_credential": None,
+            "database_type": RelationalDatabaseType.MYSQL,
+        }
+    )
+
+
+def test_add_csv_integration(
+    client_init,
+    csv_integration_data,
+    integration_response,
+    integration_service,
+    files_service,
+):
+    integration_future = asyncio.Future()
+    integration_future.set_result(
+        Integration(
+            app_id="000000000000000000000003",
+            user_id="000000000000000000000003",
+            provider=IntegrationProvider.CSV,
+            credential=Credential(
+                type=CredentialType.CSV,
+                api_key=None,
+                account_id=None,
+                secret=None,
+                tableName=None,
+                csv_credential=CSVCredential(
+                    name="test.csv",
+                    s3_key="/csv/000000000000000000000003/test.csv",
+                    table_name="test",
+                ),
+                mysql_credential=None,
+            ),
+        )
+    )
+    integration_service.create_integration.return_value = integration_future
+    response = client_init.post(
+        "/integrations?create_datasource=true&trigger_data_processor=false",
+        data=json.dumps(csv_integration_data),
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "_id": None,
+        "appId": "000000000000000000000003",
+        "createdAt": ANY,
+        "credential": {
+            "account_id": None,
+            "api_key": None,
+            "mysql_credential": None,
+            "mssql_credential": None,
+            "cdc_credential": None,
+            "refresh_token": None,
+            "secret": None,
+            "tableName": None,
+            "type": "CSV",
+            "csv_credential": {
+                "name": "test.csv",
+                "s3_key": "/csv/000000000000000000000003/test.csv",
+                "table_name": "test",
+            },
+            "api_base_url": None,
+            "branch_credential": None,
+            "facebook_ads_credential": None,
+            "tata_ivr_token": None,
+            "events_config_credential": None,
+        },
+        "datasource": {
+            "_id": "000000000000000000000003",
+            "appId": "000000000000000000000003",
+            "createdAt": ANY,
+            "enabled": True,
+            "externalSourceId": "123",
+            "integrationId": "000000000000000000000003",
+            "name": None,
+            "provider": "platform",
+            "revisionId": None,
+            "updatedAt": None,
+            "userId": "000000000000000000000003",
+            "version": "DEFAULT",
+        },
+        "provider": "csv",
+        "revisionId": None,
+        "updatedAt": None,
+        "userId": "000000000000000000000003",
+        "enabled": None,
+    }
+
+
+def test_upload_csv(client_init, integration_service, files_service):
+    sample_file = "tests/rest/controllers/test.csv"
+    response = client_init.post(
+        "/integrations/csv/upload",
+        files={"file": (sample_file, open(sample_file, "rb"))},
+        data={"appId": "000000000000000000000003"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "_id": None,
+        "app_id": "000000000000000000000003",
+        "created_at": ANY,
+        "enabled": True,
+        "filename": "test.csv",
+        "filetype": "csv",
+        "revision_id": None,
+        "s3_key": "/csv/000000000000000000000003/test.csv",
+        "table_name": "test",
+        "updated_at": None,
+    }
+    files_service.build_s3_key.assert_called_once_with(
+        **{
+            "app_id": "000000000000000000000003",
+            "filename": "tests/rest/controllers/test.csv",
+        }
+    )
+    integration_service.upload_csv_to_s3.assert_called_once_with(
+        **{"file": ANY, "s3_key": "/csv/000000000000000000000003/test.csv"}
+    )
+
+
+def test_create_table_with_csv(client_init, integration_service, files_service):
+    response = client_init.post(
+        "/integrations/csv/create",
+        json={
+            "datasourceId": "000000000000000000000003",
+            "fileId": "000000000000000000000003",
+        },
+    )
+    assert response.status_code == 200
+    files_service.get_file.assert_called_once_with(**{"id": "000000000000000000000003"})
+    integration_service.create_clickhouse_table_from_csv.assert_called_once_with(
+        **{
+            "clickhouse_credential": ClickHouseCredential(
+                username="test_username",
+                password="test_password",
+                databasename="test_database",
+            ),
+            "name": "test",
+            "s3_key": "/csv/000000000000000000000003/test.csv",
+            "app_id": "000000000000000000000003",
+        }
+    )
+
+
+def test_add_event_log_integration(
+    client_init,
+    event_logs_integration_data,
+    integration_service,
+    app_service,
+):
+    integration_future = asyncio.Future()
+    integration_future.set_result(
+        Integration(
+            app_id="000000000000000000000003",
+            user_id="000000000000000000000003",
+            provider=IntegrationProvider.EVENT_LOGS,
+            credential=Credential(
+                type=CredentialType.EVENT_LOGS,
+                api_key=None,
+                account_id=None,
+                secret=None,
+                tableName="event_logs",
+                csv_credential=None,
+                mysql_credential=None,
+            ),
+        )
+    )
+    app_with_credentials_future = asyncio.Future()
+    app_with_credentials_future.set_result(
+        App(
+            id=PydanticObjectId("000000000000000000000004"),
+            name="mixpanel1",
+            user_id=PydanticObjectId("000000000000000000000005"),
+            shared_with=set(),
+            clickhouse_credential=ClickHouseCredential(
+                username="test_username",
+                password="test_password",
+                databasename="test_database",
+            ),
+            api_key=None,
+        )
+    )
+    integration_service.create_integration.return_value = integration_future
+    app_service.get_shared_or_owned_app.return_value = app_with_credentials_future
+    response = client_init.post(
+        "/integrations?create_datasource=false&trigger_data_processor=false",
+        data=json.dumps(event_logs_integration_data),
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "_id": None,
+        "revisionId": None,
+        "createdAt": ANY,
+        "updatedAt": None,
+        "userId": "000000000000000000000003",
+        "appId": "000000000000000000000003",
+        "provider": "event_logs",
+        "credential": {
+            "type": "EVENT_LOGS",
+            "account_id": None,
+            "refresh_token": None,
+            "api_key": None,
+            "secret": None,
+            "tableName": "event_logs",
+            "mysql_credential": None,
+            "mssql_credential": None,
+            "cdc_credential": None,
+            "csv_credential": None,
+            "branch_credential": None,
+            "api_base_url": None,
+            "facebook_ads_credential": None,
+            "tata_ivr_token": None,
+            "events_config_credential": None,
+        },
+        "enabled": None,
+        "datasource": None,
+    }
+    integration_service.create_event_logs_table.assert_called_with(
+        **{
+            "app_id": "000000000000000000000004",
+            "database": "test_database",
+            "table": "event_logs",
+        }
+    )

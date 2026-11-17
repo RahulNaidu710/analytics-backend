@@ -1,0 +1,38 @@
+from enum import Enum
+from typing import Optional
+
+from beanie import Indexed, PydanticObjectId
+from pydantic import BaseModel, Field
+
+from domain.common.models import IntegrationProvider
+from repositories.document import Document
+
+
+class DataSourceVersion(str, Enum):
+    V3 = "V3"
+    V4 = "V4"
+    DEFAULT = "DEFAULT"
+
+
+class DataSource(Document):
+    integration_id: Indexed(PydanticObjectId)
+    app_id: PydanticObjectId
+    user_id: PydanticObjectId
+    provider: IntegrationProvider
+    name: Optional[str]
+    external_source_id: Optional[str]
+    version: DataSourceVersion
+    enabled: bool = True
+
+    class Settings:
+        name = "datasources"
+
+
+class ProviderDataSource(BaseModel):
+    id: str = Field(alias="_id")
+    name: str
+    version: DataSourceVersion
+    provider: IntegrationProvider
+
+    class Config:
+        allow_population_by_field_name = True

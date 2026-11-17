@@ -1,0 +1,48 @@
+from typing import Optional, List
+
+from beanie import PydanticObjectId
+from pydantic import BaseModel
+
+from domain.common.date_models import DateFilter
+from domain.retention.models import EventSelection, Retention, ComputedRetention
+from domain.metrics.models import SegmentFilter
+from domain.retention.models import Granularity
+from rest.dtos.platform_users import PlatformUserResponse
+from rest.dtos.model_response import ModelResponse
+
+
+class TransientRetentionDto(BaseModel):
+    datasourceId: PydanticObjectId
+    startEvent: EventSelection
+    goalEvent: EventSelection
+    dateFilter: DateFilter
+    segmentFilter: Optional[List[SegmentFilter]]
+    granularity: Granularity
+
+
+class CreateRetentionDto(BaseModel):
+    datasourceId: PydanticObjectId
+    startEvent: EventSelection
+    goalEvent: EventSelection
+    name: str
+    dateFilter: DateFilter
+    segmentFilter: Optional[List[SegmentFilter]]
+    granularity: Granularity
+
+
+class ComputedRetentionResponse(ComputedRetention, ModelResponse):
+    class Config:
+        allow_population_by_field_name = True
+
+
+class RetentionResponse(Retention, ModelResponse):
+    class Config:
+        allow_population_by_field_name = True
+
+
+class RetentionWithUser(Retention, ModelResponse):
+    user: Optional[PlatformUserResponse]
+
+    class Config:
+        allow_population_by_field_name = True
+        orm_mode = True

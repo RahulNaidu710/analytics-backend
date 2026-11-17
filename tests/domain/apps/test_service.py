@@ -1,0 +1,243 @@
+from collections import namedtuple
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from beanie import PydanticObjectId
+
+from domain.platform_users.models import PlatformUser
+from domain.apps.models import App, ClickHouseCredential, OrgAccess
+from domain.apps.service import AppService
+
+
+class TestAppService:
+    def setup_method(self):
+        App.get_settings = MagicMock()
+        PlatformUser.get_settings = MagicMock()
+
+        self.clickhouse_role = MagicMock()
+        self.string_utils = MagicMock()
+        self.settings = MagicMock()
+        self.service = AppService(
+            clickhouse_role=self.clickhouse_role,
+            string_utils=self.string_utils,
+            settings=self.settings,
+        )
+        self.ds_id = "000000000000000000000003"
+        self.username = "test_user"
+        self.password = "test_password"
+        self.app_name = "Test App"
+        self.id = "000000000000000000000003"
+        self.api_key = "TEST_CREDENTIAL_009"
+        self.user = PlatformUser(
+            id=PydanticObjectId("000000000000000000000003"),
+            first_name="mock",
+            last_name="mock",
+            email="FAKE_TEST_ONLY@gmail.com",
+            picture="",
+        )
+        App.id = MagicMock(return_value=self.ds_id)
+        App.api_key = MagicMock(return_value=self.api_key)
+        App.enabled = MagicMock(return_value=True)
+        App.user_id = MagicMock(return_value=self.ds_id)
+        self.FindMock = namedtuple("FindMock", ["update", "count"])
+        App.find = MagicMock(
+            return_value=self.FindMock(
+                update=AsyncMock(),
+                count=AsyncMock(return_value=2),
+            ),
+        )
+        App.insert = AsyncMock()
+        App.get = AsyncMock(
+            return_value=App(
+                id=PydanticObjectId("000000000000000000000004"),
+                revision_id=None,
+                created_at=datetime(2022, 11, 8, 7, 57, 35, 691000),
+                updated_at=datetime(2022, 11, 8, 7, 57, 35, 691000),
+                name="mixpanel1",
+                user_id=PydanticObjectId("000000000000000000000005"),
+                shared_with=set([PydanticObjectId("00000000000000000000002a")]),
+                clickhouse_credential=None,
+                domain="mock.com",
+                org_access=False,
+            ),
+        )
+        self.clickhouse_role.create_user = AsyncMock()
+        self.clickhouse_role.grant_select_permission_to_user = AsyncMock()
+        self.clickhouse_role.create_database_for_app = AsyncMock()
+        self.clickhouse_role.grant_permission_to_database = AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_share_app(self):
+        service = AppService()
+        app = AsyncMock()
+        old_shared_user_id = str(PydanticObjectId())
+        app.shared_with = set([old_shared_user_id])
+        App.find_one = AsyncMock(return_value=app)
+        App.id = MagicMock()
+        App.user_id = MagicMock()
+        app_id = str(PydanticObjectId())
+        owner_id = PlatformUser(
+            id=PydanticObjectId(),
+            first_name="ExamplePerson003",
+            last_name="ExamplePerson004",
+            email="ExamplePerson003@ada",
+        )
+
+        app = await service.share_app(app_id, owner_id, [self.user.id])
+
+        App.find_one.assert_awaited_once()
+        assert app.shared_with == set([old_shared_user_id, self.user.id])
+        app.save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_create_app(self):
+        self.service.create_clickhouse_user = AsyncMock()
+        app = await self.service.create_app(name=self.app_name, user=self.user)
+
+        app.insert.assert_called_once()
+        self.service.create_clickhouse_user.assert_called_once_with(
+            **{"id": None, "app_name": "Test App"}
+        )
+        assert not self.service.clickhouse_role.create_sample_tables.called
+
+    @pytest.mark.asyncio
+    async def test_create_app_database(self):
+        await self.service.create_app_database(
+            app_name=self.app_name, username=self.username, app_id=""
+        )
+
+        self.clickhouse_role.create_database_for_app.assert_called_with(
+            **{"database_name": "test_app", "app_id": ""}
+        )
+        self.clickhouse_role.grant_permission_to_database.assert_called_with(
+            **{"database_name": "test_app", "username": "test_user", "app_id": ""}
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_clickhouse_user(self):
+        self.service.string_utils.generate_random_value = MagicMock(
+            return_value="TEST_RANDOM_VALUE"
+        )
+        self.service.create_app_database = AsyncMock()
+
+        result = await self.service.create_clickhouse_user(
+            id=PydanticObjectId(self.id), app_name=self.app_name
+        )
+
+        assert result == ClickHouseCredential(
+            username="TEST_RANDOM_VALUE000000000000000000000003",
+            password="@TEST_RANDOM_VALUE",
+            databasename="test_app",
+        )
+        App.find.assert_called_once()
+        self.clickhouse_role.create_user.assert_called_with(
+            **{
+                "username": "TEST_RANDOM_VALUE000000000000000000000003",
+                "password": "@TEST_RANDOM_VALUE",
+                "app_id": "000000000000000000000003",
+            }
+        )
+        self.clickhouse_role.grant_select_permission_to_user.assert_called_with(
+            **{
+                "username": "TEST_RANDOM_VALUE000000000000000000000003",
+                "app_id": "000000000000000000000003",
+            }
+        )
+        self.service.create_app_database.assert_called_once_with(
+            **{
+                "app_name": "Test App",
+                "username": "TEST_RANDOM_VALUE000000000000000000000003",
+                "app_id": "000000000000000000000003",
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_user_domain(self):
+        assert await self.service.get_user_domain(app_id=self.id) == OrgAccess(
+            org_access=False, domain="mock.com"
+        )
+        App.get.assert_called_once_with(
+            PydanticObjectId("000000000000000000000003"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_app_for_user(self):
+        await self.service.get_app_for_user(user_id=self.ds_id)
+        App.find_one.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_get_users_for_app(self):
+        assert await self.service.get_users_for_app(app_id=self.id) == [
+            PydanticObjectId("000000000000000000000005"),
+            PydanticObjectId("00000000000000000000002a"),
+        ]
+        App.get.assert_called_once_with(
+            PydanticObjectId("000000000000000000000003"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_switch_org_access(self):
+        App.save = AsyncMock()
+        await self.service.switch_org_access(id=self.id, org_access=True)
+        App.save.assert_awaited_once()
+
+    def test_parse_domain_from_email(self):
+        assert (
+            self.service.parse_domain_from_email(email="user015@example.com")
+            == "example.com"
+        )
+        assert self.service.parse_domain_from_email(email="FAKE_TEST_ONLY@gmail.com") == None
+
+    @pytest.mark.asyncio
+    async def test_get_shared_or_owned_app(self):
+        await self.service.get_shared_or_owned_app(id=self.id, user=self.user)
+        App.find_one.assert_called_with(
+            {
+                "_id": PydanticObjectId("000000000000000000000003"),
+                "$or": [
+                    {
+                        "$or": [
+                            {"user_id": PydanticObjectId("000000000000000000000003")},
+                            {
+                                "shared_with": {
+                                    "$in": [
+                                        PydanticObjectId("000000000000000000000003")
+                                    ]
+                                }
+                            },
+                        ]
+                    },
+                    {"$and": [{"org_access": True}, {"domain": None}]},
+                ],
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_api_key(self):
+        FindOneMock = namedtuple("FindOneMock", ["update"])
+        self.update_mock = AsyncMock()
+        App.find_one = MagicMock(return_value=FindOneMock(update=self.update_mock))
+        await self.service.update_api_key(
+            app_id=self.id,
+            api_key=self.api_key,
+        )
+        self.update_mock.assert_called_once_with(
+            {"$set": {"api_key": "TEST_CREDENTIAL_009"}}
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_app_by_api_key(self):
+        App.find_one = AsyncMock()
+        await self.service.get_app_by_api_key(
+            api_key=self.api_key,
+        )
+        App.find_one.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_get_all_apps(self):
+        FindMock = namedtuple("FindMock", ["to_list"])
+        list_mock = AsyncMock()
+        App.find = MagicMock(return_value=FindMock(to_list=list_mock))
+        await self.service.get_all_apps()
+        App.find.assert_called()

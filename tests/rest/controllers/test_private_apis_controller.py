@@ -1,0 +1,501 @@
+import json
+from datetime import datetime
+from unittest.mock import ANY, call
+import asyncio
+
+
+from beanie import PydanticObjectId
+import pytest
+from domain.alerts.models import AlertType
+from domain.datamart.models import DataMart
+
+from domain.apps.models import ClickHouseCredential
+from domain.common.models import IntegrationProvider
+from domain.notifications.models import (
+    NotificationData,
+    NotificationType,
+    NotificationVariant,
+    ThresholdMap,
+)
+from domain.spreadsheets.models import DatabaseClient
+from rest.dtos.clickstream_event_properties import ClickStreamEventPropertiesDto
+from rest.dtos.event_properties import EventPropertiesDto
+from rest.dtos.events import CreateEventDto
+
+
+def test_update_events(client_init, events_service, events_data):
+    data = [list(d.values()) for d in events_data]
+    response = client_init.post("/private/events", data=json.dumps(data))
+    assert response.status_code == 200
+    events_service.update_events.assert_called_once_with(
+        [
+            CreateEventDto(
+                datasourceId="1234",
+                timestamp=datetime(2019, 1, 1, 0, 0),
+                provider=IntegrationProvider.MIXPANEL,
+                userId="123",
+                eventName="event_a",
+                properties={},
+            ),
+            CreateEventDto(
+                datasourceId="1234",
+                timestamp=datetime(2019, 1, 1, 0, 0),
+                provider=IntegrationProvider.MIXPANEL,
+                userId="123",
+                eventName="event_b",
+                properties={"a": "b", "b": "c"},
+            ),
+        ],
+    )
+
+
+def test_refresh_properties(client_init, properties_service):
+    response = client_init.put("/private/properties?ds_id=000000000000000000000004")
+    assert response.status_code == 200
+    assert response.json() == {
+        "_id": None,
+        "createdAt": ANY,
+        "datasourceId": "000000000000000000000004",
+        "properties": [
+            {"name": "prop1", "type": "default"},
+            {"name": "prop2", "type": "default"},
+        ],
+        "revisionId": ANY,
+        "updatedAt": None,
+    }
+    properties_service.refresh_properties.assert_called_once_with(
+        **{"ds_id": "000000000000000000000004", "app_id": "000000000000000000000003"}
+    )
+
+    response1 = client_init.put("/private/properties")
+    assert response1.status_code == 200
+    properties_service.refresh_properties_for_all_datasources.assert_called_once()
+
+
+def test_update_events_from_clickstream(client_init, action_service):
+    response = client_init.post(
+        "/private/click_stream?datasource_id=000000000000000000000013"
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": "000000000000000000000013"}
+    action_service.update_events_from_clickstream.assert_called_once_with(
+        **{"datasource_id": "000000000000000000000013"}
+    )
+
+    response1 = client_init.post("/private/click_stream")
+    assert response1.status_code == 200
+    assert response1.json() == {"updated": ["000000000000000000000003"]}
+    calls = [call(datasource_id="000000000000000000000003")]
+    action_service.update_events_from_clickstream.assert_has_calls(
+        calls=calls, any_order=True
+    )
+
+
+def test_get_notifications(
+    client_init, notification_service, funnel_service, metric_service
+):
+    response = client_init.get(
+        "/private/notifications?user_id='000000000000000000000013'"
+    )
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "name": "Video Funnel",
+            "notification_id": "00000000000000000000000c",
+            "notification_type": NotificationType.ALERT,
+            "original_value": 0.1,
+            "threshold_type": "pct",
+            "trigger": True,
+            "reference": "639237437483490",
+            "user_threshold": {"max": 18.0, "min": 12.0},
+            "value": -16.67,
+            "variant": "funnel",
+        },
+        {
+            "name": "Alert Metric -Updated",
+            "notification_id": "00000000000000000000000c",
+            "notification_type": NotificationType.ALERT,
+            "original_value": 0.1,
+            "reference": "00000000000003ea",
+            "threshold_type": "pct",
+            "trigger": False,
+            "user_threshold": {"max": 3236.0, "min": 1212.0},
+            "value": -16.67,
+            "variant": "metric",
+        },
+        {
+            "name": "Video Funnel",
+            "notification_id": "00000000000000000000000c",
+            "notification_type": NotificationType.UPDATE,
+            "original_value": 0.1,
+            "reference": "639237437483490",
+            "threshold_type": None,
+            "trigger": None,
+            "user_threshold": None,
+            "value": -16.67,
+            "variant": "funnel",
+        },
+        {
+            "name": "Alert Metric -Updated",
+            "notification_id": "00000000000000000000000c",
+            "notification_type": NotificationType.UPDATE,
+            "original_value": 0.1,
+            "reference": "00000000000003ea",
+            "threshold_type": None,
+            "trigger": None,
+            "user_threshold": None,
+            "value": -16.67,
+            "variant": "metric",
+        },
+    ]
+    notification_service.compute_alerts.assert_called_with(
+        [
+            NotificationData(
+                name="Video Funnel",
+                notification_id=PydanticObjectId("000000000000000000000007"),
+                variant=NotificationVariant.FUNNEL,
+                value=0.2,
+                prev_day_value=0.2,
+                reference="639237437483490",
+                threshold_type="absolute",
+                threshold_value=ThresholdMap(min=12.0, max=18.0),
+            ),
+            NotificationData(
+                name="Alert Metric -Updated",
+                notification_id=PydanticObjectId("000000000000000000000007"),
+                variant=NotificationVariant.METRIC,
+                value=0.2,
+                prev_day_value=0.2,
+                reference="00000000000003ea",
+                threshold_type="absolute",
+                threshold_value=ThresholdMap(min=1212.0, max=3236.0),
+            ),
+        ],
+    )
+    notification_service.compute_updates.assert_called_with(
+        [
+            NotificationData(
+                name="Video Funnel",
+                notification_id=PydanticObjectId("000000000000000000000007"),
+                variant=NotificationVariant.FUNNEL,
+                value=0.2,
+                prev_day_value=0.2,
+                reference="639237437483490",
+                threshold_type="absolute",
+                threshold_value=ThresholdMap(min=12.0, max=18.0),
+            ),
+            NotificationData(
+                name="Alert Metric -Updated",
+                notification_id=PydanticObjectId("000000000000000000000007"),
+                variant=NotificationVariant.METRIC,
+                value=0.2,
+                prev_day_value=0.2,
+                reference="00000000000003ea",
+                threshold_type="absolute",
+                threshold_value=ThresholdMap(min=1212.0, max=3236.0),
+            ),
+        ],
+    )
+
+
+def test_post_notifications(client_init, notification_service, dpq_service):
+    response = client_init.post("/private/notifications")
+    assert response.json() == [
+        {"job": "a98a10b4-d26e-46fa-aa6f", "user_id": "000000000000000000000009"}
+    ]
+    dpq_service.enqueue_user_notification.assert_called_with("000000000000000000000009")
+
+
+def test_update_event_properties(
+    client_init, event_properties_service, event_properties_data
+):
+    response = client_init.post(
+        "/private/event_properties",
+        data=json.dumps(event_properties_data),
+    )
+    assert response.json() == {"updated": True}
+    event_properties_service.update_event_properties.assert_called_once_with(
+        **{
+            "event_properties": EventPropertiesDto(
+                datasource_id="000000000000000000000015",
+                event="test-event",
+                properties=["prop1", "prop4", "prop3"],
+                provider="mixpanel",
+            ),
+        }
+    )
+
+
+def test_get_event_properties(client_init, event_properties_service):
+    response = client_init.get("/private/event_properties")
+    assert response.json() == [
+        {
+            "_id": None,
+            "createdAt": ANY,
+            "datasourceId": "000000000000000000000015",
+            "event": "test",
+            "properties": [
+                {"name": "prop1", "type": "string"},
+                {"name": "prop4", "type": "string"},
+                {"name": "prop3", "type": "string"},
+            ],
+            "provider": "mixpanel",
+            "revisionId": None,
+            "updatedAt": None,
+        },
+        {
+            "_id": None,
+            "createdAt": ANY,
+            "datasourceId": "000000000000000000000015",
+            "event": "test2",
+            "properties": [
+                {"name": "prop1", "type": "string"},
+                {"name": "prop4", "type": "string"},
+                {"name": "prop3", "type": "string"},
+            ],
+            "provider": "mixpanel",
+            "revisionId": None,
+            "updatedAt": None,
+        },
+        {
+            "_id": None,
+            "createdAt": ANY,
+            "datasourceId": "000000000000000000000011",
+            "event": "test",
+            "properties": [
+                {"name": "prop1", "type": "string"},
+                {"name": "prop4", "type": "string"},
+                {"name": "prop3", "type": "string"},
+            ],
+            "provider": "mixpanel",
+            "revisionId": None,
+            "updatedAt": None,
+        },
+    ]
+    event_properties_service.get_event_properties.assert_called_once()
+
+
+def test_update_clickstream_event_properties(
+    client_init, clickstream_event_properties_service, clickstream_event_properties_data
+):
+    response = client_init.post(
+        "/private/clickstream_event_properties",
+        data=json.dumps(clickstream_event_properties_data),
+    )
+    assert response.json() == {"updated": True}
+    clickstream_event_properties_service.update_event_properties.assert_called_once_with(
+        **{
+            "event_properties": ClickStreamEventPropertiesDto(
+                event="$autocapture", properties=["prop1", "prop4", "prop3"]
+            )
+        }
+    )
+
+
+def test_get_clickstream_event_properties(
+    client_init, clickstream_event_properties_service
+):
+    response = client_init.get("/private/clickstream_event_properties")
+    assert response.json() == [
+        {
+            "_id": None,
+            "createdAt": ANY,
+            "event": "$autocapture",
+            "properties": [
+                {"name": "prop1", "type": "string"},
+                {"name": "prop4", "type": "string"},
+                {"name": "prop3", "type": "string"},
+            ],
+            "revisionId": None,
+            "updatedAt": None,
+        },
+        {
+            "_id": None,
+            "createdAt": ANY,
+            "event": "$pageview",
+            "properties": [
+                {"name": "prop1", "type": "string"},
+                {"name": "prop4", "type": "string"},
+                {"name": "prop3", "type": "string"},
+            ],
+            "revisionId": None,
+            "updatedAt": None,
+        },
+    ]
+    clickstream_event_properties_service.get_event_properties.assert_called_once()
+
+
+def test_trigger_refresh_datamart_for_all_apps(
+    client_init, datamart_service, dpq_service
+):
+    response = client_init.post("/private/apps/datamart")
+    assert response.status_code == 200
+    assert response.json() == [
+        {"app_id": "000000000000000000000006", "jobs": "a98a10b4-d26e-46fa-aa6g"},
+        {"app_id": "000000000000000000000011", "jobs": "a98a10b4-d26e-46fa-aa6g"},
+    ]
+    datamart_service.get_all_apps_with_datamarts.assert_called_once()
+    dpq_service.enqueue_refresh_datamart_for_app.assert_has_calls(
+        calls=[call("000000000000000000000006"), call("000000000000000000000011")],
+        any_order=True,
+    )
+
+
+def test_refresh_datamart_tables_for_app(client_init, datamart_service, app_service):
+    response = client_init.post(
+        "/private/datamart", json={"appId": "000000000000000000000011"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "000000000000000000000011": {"000000000000000000000006": "updated"}
+    }
+    app_service.get_app.assert_called_with(**{"id": "000000000000000000000011"})
+    datamart_service.refresh_datamart_table.assert_called_once_with(
+        **{
+            "clickhouse_credential": ClickHouseCredential(
+                username="test_username",
+                password="test_password",
+                databasename="test_database",
+            ),
+            "datamart_id": "000000000000000000000006",
+            "database_client": DatabaseClient.CLICKHOUSE,
+            "db_creds": None,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_datamart_tables_success(
+    client_init,
+    datamart_action_service,
+):
+    response = client_init.post(
+        "/private/datamart_actions/refresh",
+        data=json.dumps(
+            {
+                "datamartId": "000000000000000000000006",
+                "appId": "00000000000000000000000d",
+                "tableName": "test_sql",
+                "databaseClient": "clickhouse",
+                "databaseCredential": {
+                    "username": "test_username",
+                    "password": "test_password",
+                    "databasename": "test_database",
+                },
+            }
+        ),
+    )
+    assert response.status_code == 200
+    datamart_action_service.refresh_table_action.assert_called_once_with(
+        app_id="00000000000000000000000d",
+        clickhouse_credential=ClickHouseCredential(
+            username="test_username",
+            password="test_password",
+            databasename="test_database",
+        ),
+        database_credential=ClickHouseCredential(
+            username="test_username",
+            password="test_password",
+            databasename="test_database",
+        ),
+        database_client=DatabaseClient.CLICKHOUSE,
+        table_name="test_sql",
+        query="select event_name, user_id from events",
+    )
+
+    assert response.json() is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_datamart_tables_failure(
+    client_init,
+    datamart_action_service,
+):
+    refresh_table_action_future = asyncio.Future()
+    refresh_table_action_future.set_result(True)
+    datamart_action_service.refresh_table_action.return_value = (
+        refresh_table_action_future
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        response = client_init.post(
+            "/private/datamart_actions/refresh",
+            data=json.dumps(
+                {
+                    "datamartId": "000000000000000000000006",
+                    "appId": "00000000000000000000000d",
+                    "tableName": "test_sql",
+                    "databaseClient": "clickhouse",
+                    "databaseCredential": {
+                        "username": "test_username",
+                        "password": "test_password",
+                        "databasename": "test_database",
+                    },
+                }
+            ),
+        )
+        assert response.status_code == 200
+        assert (
+            str(exc_info.value)
+        ) == "Could not refresh datamart 000000000000000000000006"
+
+
+@pytest.mark.asyncio
+async def test_get_app(
+    client_init,
+    app_service,
+):
+    response = client_init.get("/private/apps/000000000000000000000004")
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "000000000000000000000004",
+        "name": "mixpanel1",
+        "userId": "000000000000000000000005",
+        "sharedWith": [],
+        "domain": None,
+        "orgAccess": False,
+        "enabled": True,
+        "clickhouseCredential": {
+            "username": "test_username",
+            "password": "test_password",
+            "databasename": "test_database",
+        },
+        "remoteConnection": None,
+        "apiKey": None,
+    }
+    app_service.get_app.assert_called_with(**{"id": "000000000000000000000004"})
+
+
+@pytest.mark.asyncio
+async def test_get_integration(
+    client_init,
+    integration_service,
+):
+    response = client_init.get("/private/integrations/000000000000000000000004")
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": "000000000000000000000004",
+        "appId": "000000000000000000000003",
+        "userId": "000000000000000000000003",
+        "provider": "mixpanel",
+        "credential": {
+            "type": "API_KEY",
+            "account_id": "120232",
+            "refresh_token": None,
+            "api_key": "TEST_CREDENTIAL_005",
+            "secret": "TEST_CREDENTIAL_006",
+            "tableName": "",
+            "mysql_credential": None,
+            "mssql_credential": None,
+            "cdc_credential": None,
+            "csv_credential": None,
+            "branch_credential": None,
+            "api_base_url": None,
+            "facebook_ads_credential": None,
+            "tata_ivr_token": None,
+            "events_config_credential": None,
+        },
+    }
+    integration_service.get_integration.assert_called_with(
+        **{"id": "000000000000000000000004"}
+    )

@@ -1,0 +1,109 @@
+from typing import List, Optional
+
+from beanie import PydanticObjectId
+from pydantic import BaseModel
+
+from domain.spreadsheets.models import (
+    AIQuery,
+    ComputedSpreadsheet,
+    ComputedSpreadsheetWithCustomHeaders,
+    DimensionDefinition,
+    Formatting,
+    MetricDefinition,
+    PivotAxisDetail,
+    PivotValueDetail,
+    SpreadSheetCharts,
+    SpreadSheetColumn,
+    SpreadsheetType,
+    SubHeaderColumn,
+    WorkBook,
+)
+from rest.dtos.platform_users import PlatformUserResponse
+from rest.dtos.model_response import ModelResponse
+
+
+class TransientSpreadsheetsDto(BaseModel):
+    datasourceId: str
+    query: str
+    is_sql: bool = False
+    isDatamart: bool = False
+    ai_query: Optional[AIQuery]
+    query_id: Optional[str]
+
+
+class TransientExpressionDto(BaseModel):
+    datasourceId: str
+    expression: str
+    variables: dict
+    table: str
+    database: str
+
+
+class TransientSpreadsheetColumnDto(BaseModel):
+    datasourceId: str
+    dimensions: List[DimensionDefinition]
+    metrics: List[MetricDefinition]
+    database: str
+    table: str
+
+
+class ComputedSpreadsheetQueryResponse(
+    ComputedSpreadsheetWithCustomHeaders, ModelResponse
+):
+    class Config:
+        allow_population_by_field_name = True
+
+
+class SpreadSheetDto(BaseModel):
+    name: str
+    headers: List[SpreadSheetColumn]
+    subHeaders: List[SubHeaderColumn]
+    is_sql: bool
+    query: str
+    edit_mode: bool
+    sheet_type: SpreadsheetType
+    meta: dict
+    ai_query: Optional[AIQuery]
+    column_format: Optional[dict[str, Formatting]]
+    charts: Optional[List[SpreadSheetCharts]]
+
+
+class CreateWorkBookDto(BaseModel):
+    name: str
+    spreadsheets: List[SpreadSheetDto]
+    datasourceId: str
+
+
+class VlookupDto(BaseModel):
+    datasourceId: str
+    searchQuery: str
+    lookupQuery: str
+    searchKeyColumn: str
+    lookupColumn: str
+    lookupIndexColumn: str
+
+
+class WorkBookResponse(WorkBook, ModelResponse):
+    class Config:
+        allow_population_by_field_name = True
+
+
+class WorkbookWithUser(WorkBook, ModelResponse):
+    user: Optional[PlatformUserResponse]
+
+    class Config:
+        allow_population_by_field_name = True
+        orm_mode = True
+
+
+class SavedWorkBookResponse(WorkBook, ModelResponse):
+    class Config:
+        allow_population_by_field_name = True
+
+
+class ComputePivotDto(BaseModel):
+    dsId: PydanticObjectId
+    query: str
+    rows: List[PivotAxisDetail]
+    columns: List[PivotAxisDetail]
+    values: List[PivotValueDetail]
