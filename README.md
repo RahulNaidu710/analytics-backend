@@ -34,6 +34,11 @@ Test identities and keys are intentionally synthetic and must not be used agains
 external services. The consumer-email-domain tests use FAKE_TEST_ONLY@gmail.com
 only to exercise the Gmail-domain rule; all other fixture emails use example.com.
 
-The generated browser capture SDK and source map are omitted. The static files
-are import-compatible placeholders, not a working browser SDK. See static/README.md.
-Analytics APIs and tests are retained.
+The generated browser capture SDK, source map and static directory are omitted.
+The two SDK download URLs return HTTP 404. The controller no longer reads SDK
+files on import. Event ingestion and analytics APIs remain available.
+The event-capture test builds a small synthetic payload instead of embedding
+a browser recording with device/session identifiers.
+
+Use analytics-backend-tasks-9-10.zip for either task, starting from a fresh
+extraction for each. Browser SDK delivery is outside these backend tasks.

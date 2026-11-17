@@ -1,8 +1,50 @@
+import json
+from base64 import b64encode
+
+import pytest
+
+
 def test_capture_click_stream(client_init, datasource_service, clickstream_service):
-    encoded = "eyJldmVudCI6IiRwYWdldmlldyIsInByb3BlcnRpZXMiOnsiJG9zIjoiTWFjIE9TIFgiLCIkYnJvd3NlciI6IkNocm9tZSIsIiRkZXZpY2VfdHlwZSI6IkRlc2t0b3AiLCIkY3VycmVudF91cmwiOiJodHRwOi8vbG9jYWxob3N0OjMwMDAvYW5hbHl0aWNzL2V4cGxvcmUvNjNkOGVmNWE3YjAyZGJkMWRjZjIwZGNjIiwiJGhvc3QiOiJsb2NhbGhvc3Q6MzAwMCIsIiRwYXRobmFtZSI6Ii9hbmFseXRpY3MvZXhwbG9yZS82M2Q4ZWY1YTdiMDJkYmQxZGNmMjBkY2MiLCIkYnJvd3Nlcl92ZXJzaW9uIjoxMDksIiRicm93c2VyX2xhbmd1YWdlIjoiZW4tR0IiLCIkc2NyZWVuX2hlaWdodCI6OTgyLCIkc2NyZWVuX3dpZHRoIjoxNTEyLCIkdmlld3BvcnRfaGVpZ2h0IjoyNjQsIiR2aWV3cG9ydF93aWR0aCI6MTUxMiwiJGxpYiI6IndlYiIsIiRsaWJfdmVyc2lvbiI6IjEuNDIuMyIsIiRpbnNlcnRfaWQiOiJmbHJzazM5ZW02Y29wdnhlIiwiJHRpbWUiOjE2NzU3Njg4MjUuMDEsImRpc3RpbmN0X2lkIjoiMTg2MmE5ZTUyMTIxYTM3LTBiMzliOTQ5OGQ4YzU0LTE2NTI1NjM1LTE2YTdmMC0xODYyYTllNTIxMzI4ZmEiLCIkZGV2aWNlX2lkIjoiMTg2MmE5ZTUyMTIxYTM3LTBiMzliOTQ5OGQ4YzU0LTE2NTI1NjM1LTE2YTdmMC0xODYyYTllNTIxMzI4ZmEiLCIkcmVmZXJyZXIiOiIkZGlyZWN0IiwiJHJlZmVycmluZ19kb21haW4iOiIkZGlyZWN0IiwidG9rZW4iOiI2M2Q4ZWY1YTdiMDJkYmQxZGNmMjBkY2MiLCIkc2Vzc2lvbl9pZCI6IjE4NjJiOWFmYjg2YmYxLTBlOGIyMGU1NjI4NWUtMTY1MjU2MzUtMTZhN2YwLTE4NjJiOWFmYjg3Njk5IiwiJHdpbmRvd19pZCI6IjE4NjJiOWFmYjg4MmRlNC0wNGQ4ZWI2NmY5OWI3OS0xNjUyNTYzNS0xNmE3ZjAtMTg2MmI5YWZiODkyNDRmIiwiJHBhZ2V2aWV3X2lkIjoiMTg2MmI5YjA0YjMyMzY4LTA5YTdiZDRkMjdlMWJiLTE2NTI1NjM1LTE2YTdmMC0xODYyYjliMDRiNDIxZDIifSwidGltZXN0YW1wIjoiMjAyMy0wMi0wN1QxMToyMDoyNS4wMTNaIn0="
+    payload = {
+        "event": "$pageview",
+        "properties": {
+            "token": "000000000000000000000003",
+            "distinct_id": "synthetic-test-user",
+            "$current_url": "https://example.com/test-page",
+        },
+        "timestamp": "2024-01-01T00:00:00Z",
+    }
+    encoded = b64encode(json.dumps(payload).encode()).decode()
     response = client_init.post(
-        "/events/capture/e/?ip=1&_=1675765206748&ver=1.42.3",
-        data={"data": str(encoded)},
+        "/events/capture/e/?ip=127.0.0.1&_=1&ver=test",
+        data={"data": encoded},
     )
 
     assert response.status_code == 200
+    assert response.json() == {"success": True}
+    clickstream_service.update_events.assert_awaited_once_with(
+        datasource_id=payload["properties"]["token"],
+        events=[payload],
+        app_id=datasource_service.get_datasources_for_platform.return_value.result()[0].app_id,
+    )
+
+
+@pytest.mark.parametrize("path", [
+    "/events/capture/static/array.js",
+    "/events/capture/static/array.js.map",
+])
+def test_omitted_browser_sdk_returns_not_found(client_init, path):
+    response = client_init.get(path)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+
+
+def test_capture_decide_remains_available(client_init):
+    response = client_init.post(
+        "/events/capture/decide/?v=test&ip=127.0.0.1&_=1&ver=test"
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "config": {"enable_collect_everything": True},
+        "sessionRecording": False,
+    }

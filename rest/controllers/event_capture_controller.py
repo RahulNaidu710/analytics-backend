@@ -1,19 +1,13 @@
 import json
-import os
 from base64 import b64decode
 from typing import Union
 
-from fastapi import APIRouter, Depends, Form, Response
+from fastapi import APIRouter, Depends, Form
 
 from domain.clickstream.service import ClickstreamService
 from domain.datasources.service import DataSourceService
 
 router = APIRouter()
-
-ROOT_DIR = os.path.abspath(os.curdir)
-array = open(f"{ROOT_DIR}/static/array.js", "r").read()
-array_map = open(f"{ROOT_DIR}/static/array.js.map", "r").read()
-
 
 @router.post("/events/capture/decide/")
 async def analyse_decide_call(
@@ -49,16 +43,6 @@ async def capture_click_stream(
     else:
         return {"success": False}
     return {"success": True}
-
-
-@router.get("/events/capture/static/array.js")
-async def get_js_sdk():
-    return Response(array, media_type="application/javascript; charset=UTF-8")
-
-
-@router.get("/events/capture/static/array.js.map")
-async def get_js_sdk_map():
-    return Response(array_map)
 
 
 @router.get("/events/clickstream")
